@@ -1,0 +1,11 @@
+{
+  "C_Cpp.clang_format_fallbackStyle": "{ BasedOnStyle: Google, ColumnLimit: 160, AlignConsecutiveAssignments: true }",
+  "C_Cpp.default.cStandard": "c23",
+  "C_Cpp.default.cppStandard": "c++23",
+  "files.exclude": {
+    "**/build/_deps": true
+  },
+  "git.detectSubmodules": false,
+  "files.insertFinalNewline": true,
+  "files.trimFinalNewlines": true
+}
