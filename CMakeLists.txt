@@ -1,0 +1,36 @@
+cmake_minimum_required(VERSION 3.20)
+project(AudioDeviceManager CXX)
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+add_library(AudioDeviceManager INTERFACE)
+add_library(ADM::ADM ALIAS AudioDeviceManager)   # so consumers can link ADM::ADM
+target_include_directories(AudioDeviceManager INTERFACE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_compile_features(AudioDeviceManager INTERFACE cxx_std_23)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  # no linking against audio APIs, only optionally widening the include search path
+  # for *-dev headers in case they live in a non-standard prefix
+  find_package(PkgConfig)
+  if(PkgConfig_FOUND)
+    pkg_check_modules(PULSEAUDIO libpulse)
+    pkg_check_modules(ALSA alsa)
+    if(PULSEAUDIO_FOUND)
+      target_include_directories(AudioDeviceManager INTERFACE ${PULSEAUDIO_INCLUDE_DIRS})
+    endif()
+    if(ALSA_FOUND)
+      target_include_directories(AudioDeviceManager INTERFACE ${ALSA_INCLUDE_DIRS})
+    endif()
+  endif()
+  # dlopen/dlsym/dlclose (dynamically linking against audio APIs), pthread (async worker thread)
+  target_link_libraries(AudioDeviceManager INTERFACE ${CMAKE_DL_LIBS} pthread)
+elseif(WIN32)
+  target_link_libraries(AudioDeviceManager INTERFACE ole32 oleaut32)
+endif()
+option(ADM_BUILD_TESTS "Build AudioDeviceManager tests" ON)
+if(ADM_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(tests)
+endif()
