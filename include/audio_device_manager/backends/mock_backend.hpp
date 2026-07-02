@@ -12,27 +12,38 @@ class MockBackend : public AudioBackend {
   bool available() const override { return true; }
 
   CommandResultFuture set_volume_async(const std::string& device_id, float volume, std::function<void(CommandResult)> on_done = nullptr) override {
-    return run_command(device_id, std::move(on_done),
-                       [volume](std::vector<DeviceSnapshot>& snaps, std::vector<DeviceSnapshot>::iterator it) { it->volume = volume; });
+    return this->run_command(device_id, std::move(on_done),
+                             [volume](std::vector<DeviceSnapshot>& snaps, std::vector<DeviceSnapshot>::iterator it) { it->volume = volume; });
   }
   CommandResultFuture set_mute_async(const std::string& device_id, bool muted, std::function<void(CommandResult)> on_done = nullptr) override {
-    return run_command(device_id, std::move(on_done),
-                       [muted](std::vector<DeviceSnapshot>& snaps, std::vector<DeviceSnapshot>::iterator it) { it->muted = muted; });
+    return this->run_command(device_id, std::move(on_done),
+                             [muted](std::vector<DeviceSnapshot>& snaps, std::vector<DeviceSnapshot>::iterator it) { it->muted = muted; });
   }
   CommandResultFuture set_default_async(const std::string& device_id, std::function<void(CommandResult)> on_done = nullptr) override {
-    return run_command(device_id, std::move(on_done), [](std::vector<DeviceSnapshot>& snaps, std::vector<DeviceSnapshot>::iterator it) {
+    return this->run_command(device_id, std::move(on_done), [](std::vector<DeviceSnapshot>& snaps, std::vector<DeviceSnapshot>::iterator it) {
       for (auto& s : snaps) s.is_default = false;  // enforce exclusivity, mirrors real backends
       it->is_default = true;
     });
   }
 
+  void request_refresh() override {
+    this->worker_.post([this] {
+      std::vector<DeviceSnapshot> copy;
+      {
+        std::lock_guard lock(this->snapshots_mutex_);
+        copy = this->snapshots_;
+      }
+      this->push_update_event(std::move(copy));
+    });
+  }
+
   // update backend state and send mock audio backend device update event
-  void push_snapshot(std::vector<DeviceSnapshot> snapshots) {
+  void push_snapshot(std::vector<DeviceSnapshot> snapshots, bool suppress_update_event = false) {
     {
       std::lock_guard lock(this->snapshots_mutex_);
       this->snapshots_ = snapshots;
     }
-    push_update_event(std::move(snapshots));
+    if (!suppress_update_event) this->push_update_event(std::move(snapshots));
   }
 
  private:
@@ -43,23 +54,23 @@ class MockBackend : public AudioBackend {
     auto promise = std::make_shared<std::promise<CommandResult>>();
     auto future  = promise->get_future();
 
-    worker_.post([this, device_id = std::move(device_id), on_done = std::move(on_done), mutate = std::move(mutate), promise] {
+    this->worker_.post([this, device_id = std::move(device_id), on_done = std::move(on_done), mutate = std::move(mutate), promise] {
       CommandResult result{};
       try {
         std::vector<DeviceSnapshot> snapshot_copy;
         {
-          std::lock_guard lock(snapshots_mutex_);
-          auto it = std::find_if(snapshots_.begin(), snapshots_.end(), [&](const DeviceSnapshot& s) { return s.backend_device_id == device_id; });
-          if (it == snapshots_.end()) {
+          std::lock_guard lock(this->snapshots_mutex_);
+          auto it = std::find_if(this->snapshots_.begin(), this->snapshots_.end(), [&](const DeviceSnapshot& s) { return s.backend_device_id == device_id; });
+          if (it == this->snapshots_.end()) {
             result.status = CommandStatus::DeviceNotFound;
             result.detail = "device " + device_id + " not found";
           } else {
-            mutate(snapshots_, it);
-            snapshot_copy = snapshots_;
+            mutate(this->snapshots_, it);
+            snapshot_copy = this->snapshots_;
           }
         }
 
-        if (result) push_update_event(std::move(snapshot_copy));
+        if (result) this->push_update_event(std::move(snapshot_copy));
 
         if (on_done) on_done(result);
         promise->set_value(result);

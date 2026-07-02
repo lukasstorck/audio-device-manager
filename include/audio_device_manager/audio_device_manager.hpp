@@ -22,6 +22,7 @@ class AudioDeviceManager {
   AudioDeviceManager(std::chrono::milliseconds notify_rate_limit = std::chrono::milliseconds(500))
       : notify_rate_limit_(notify_rate_limit), scheduler_thread_([this] { this->scheduler_run(); }) {}
   ~AudioDeviceManager() {
+    for (auto& backend : this->backends_) backend->unsubscribe();
     {
       std::lock_guard lock(this->scheduler_mutex_);
       this->scheduler_stop_ = true;
@@ -44,7 +45,7 @@ class AudioDeviceManager {
     this->backends_.push_back(std::move(backend));
   }
 
-  // Count of registered backends, diagnostic helper
+  // Count of registered backends
   std::size_t backend_count() const { return this->backends_.size(); }
 
   // Returns a list of all currently or previously connected devices
@@ -124,7 +125,78 @@ class AudioDeviceManager {
     this->subscribers_.erase(id);
   }
 
+  /// Asynchronously requests all backends to report a freshed devices.
+  ///
+  /// Returns immediately. The returned future resolves once all backends have
+  /// fired their update event in response. `on_done`, if given, fires on the
+  /// thread that delivers the last backend acknowledgement.
+  CommandResultFuture refresh_async(std::function<void(CommandResult)> on_done = nullptr) {
+    bool is_new_pending_refresh = false;
+    std::future<CommandResult> future;
+    {
+      std::lock_guard lock(this->pending_refresh_mutex_);
+
+      // no backends registered -> early exit
+      if (this->backends_.empty()) {
+        std::promise<CommandResult> promise;
+        future = promise.get_future();
+        CommandResult result{};
+        if (on_done) on_done(result);
+        promise.set_value(result);
+        return future;
+      }
+
+      // prepare refresh (if not already pending)
+      if (!this->pending_refresh) {
+        this->pending_refresh = std::make_shared<PendingRefresh>();
+        for (auto& backend : this->backends_) this->pending_refresh->pending_backends.insert(backend->type());
+        is_new_pending_refresh = true;
+      }
+      
+      // wire up result feature and callback (to new or existing promise)
+      this->pending_refresh->promises.emplace_back();
+      future = this->pending_refresh->promises.back().get_future();
+      this->pending_refresh->callbacks.push_back(std::move(on_done));
+    }
+    
+    // trigger a pending refresh, unless one is already pending
+    if (is_new_pending_refresh) {
+      for (auto& backend : this->backends_) backend->request_refresh();
+    }
+
+    return future;
+  }
+
+  /// Synchronously refreshes all backends and blocks until all have reported back.
+  CommandResult refresh() { return this->refresh_async().get(); }
+
  private:
+  struct PendingRefresh {
+    std::unordered_set<AudioBackendType> pending_backends;
+    std::vector<std::promise<CommandResult>> promises;
+    std::vector<std::function<void(CommandResult)>> callbacks;
+
+    void complete() {
+      CommandResult result{};
+      for (auto& callback : this->callbacks) {
+        if (callback) callback(result);
+      }
+      for (auto& promise : this->promises) promise.set_value(result);
+    }
+  };
+
+  void acknowledge_backend(AudioBackendType backend_type) {
+    std::shared_ptr<PendingRefresh> completed;
+    {
+      std::lock_guard lock(this->pending_refresh_mutex_);
+      if (!this->pending_refresh) return;
+      this->pending_refresh->pending_backends.erase(backend_type);
+      if (!this->pending_refresh->pending_backends.empty()) return;
+      completed = std::move(this->pending_refresh);  // clears active slot before calling out
+    }
+    completed->complete();  // called outside lock: callbacks may themselves call refresh_async
+  }
+
   void on_backend_event(AudioBackend& backend, std::vector<DeviceSnapshot> snapshots) {
     bool any_change = false;
     {
@@ -152,6 +224,7 @@ class AudioDeviceManager {
       }
     }  // lock released before notifying
 
+    this->acknowledge_backend(backend.type());
     if (any_change) this->schedule_notify();
   }
   void schedule_notify() {
@@ -202,7 +275,9 @@ class AudioDeviceManager {
   std::unordered_map<std::size_t, std::function<void()>> subscribers_;
   std::atomic<std::size_t> next_subscription_id_{0};
 
-  // --- callback scheduler ---
+  std::mutex pending_refresh_mutex_;
+  std::shared_ptr<PendingRefresh> pending_refresh;
+
   std::mutex scheduler_mutex_;
   std::condition_variable scheduler_cv_;
   bool scheduler_pending_ = false;
@@ -215,7 +290,7 @@ class AudioDeviceManager {
 inline void register_audio_backends(AudioDeviceManager& manager) {
 #if defined(__linux__)
   // manager.register_backend(std::make_unique<AlsaBackend>());
-  // manager.register_backend(std::make_unique<PulseAudioBackend>());
+  manager.register_backend(std::make_unique<PulseAudioBackend>());
 #elif defined(_WIN32)
   // manager.register_backend(std::make_unique<WasapiBackend>());
 #endif

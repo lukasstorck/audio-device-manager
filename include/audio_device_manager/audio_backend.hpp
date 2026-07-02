@@ -26,17 +26,28 @@ class AudioBackend {
   virtual CommandResultFuture set_mute_async(const std::string& device_id, bool muted, std::function<void(CommandResult)> on_done = nullptr)     = 0;
   virtual CommandResultFuture set_default_async(const std::string& device_id, std::function<void(CommandResult)> on_done = nullptr)              = 0;
 
+  virtual void request_refresh() = 0;
+
   void push_update_event(std::vector<DeviceSnapshot> snapshots) {
+    std::lock_guard lock(this->on_change_mutex_);
     if (this->on_change_) this->on_change_(std::move(snapshots));
   }
-  void subscribe(BackendUpdateEventCallback on_change) { this->on_change_ = std::move(on_change); }
-  void unsubscribe() { this->on_change_ = nullptr; }
+  virtual void subscribe(BackendUpdateEventCallback on_change) {
+    std::lock_guard lock(this->on_change_mutex_);
+    this->on_change_ = std::move(on_change);
+    this->request_refresh();
+  }
+  virtual void unsubscribe() {
+    std::lock_guard lock(this->on_change_mutex_);
+    this->on_change_ = nullptr;
+  }
 
  private:
   const std::string name_;
 
  protected:
   AudioBackend(char const* name) : name_(name) {}
+  std::mutex on_change_mutex_;
   BackendUpdateEventCallback on_change_;
 };
 
