@@ -31,8 +31,9 @@ class AudioDeviceManager {
     this->scheduler_thread_.join();
   }
 
-  void register_backend(std::unique_ptr<AudioBackend> backend) {
-    if (!backend->available()) return;
+  // Register a new backend, return success if the backend was successfully registered
+  bool register_backend(std::unique_ptr<AudioBackend> backend) {
+    if (!backend->available()) return false;
 
     // check for duplicate backend type
     for (const auto& existing : this->backends_) {
@@ -43,6 +44,7 @@ class AudioDeviceManager {
 
     backend->subscribe([this, ptr = backend.get()](std::vector<DeviceSnapshot> snapshots) { this->on_backend_event(*ptr, std::move(snapshots)); });
     this->backends_.push_back(std::move(backend));
+    return true;
   }
 
   // Count of registered backends
@@ -55,6 +57,30 @@ class AudioDeviceManager {
     result.reserve(this->devices_.size());
     for (auto& [key, device] : this->devices_) result.push_back(device);
     return result;
+  }
+
+  // Returns sorted list of all currently or previously connected devices
+  std::vector<std::reference_wrapper<Device>> get_devices_sorted() {
+    auto devices = this->get_devices();
+
+    std::sort(devices.begin(), devices.end(), [](const auto& a, const auto& b) {
+      const auto& device_a = a.get();
+      const auto& device_b = b.get();
+
+      const auto& backend_name_a = device_a.backend_name();
+      const auto& backend_name_b = device_b.backend_name();
+      if (backend_name_a != backend_name_b) return backend_name_a < backend_name_b;
+
+      const auto device_type_a = device_a.type() == audio_device_manager::DeviceType::Input ? 0 : 1;
+      const auto device_type_b = device_b.type() == audio_device_manager::DeviceType::Input ? 0 : 1;
+      if (device_type_a != device_type_b) return device_type_a < device_type_b;
+
+      const auto device_id_a = device_a.id().backend_device_id;
+      const auto device_id_b = device_b.id().backend_device_id;
+      return device_id_a < device_id_b;
+    });
+
+    return devices;
   }
 
   // Erases every currently-disconnected device. Returns the count
@@ -152,13 +178,13 @@ class AudioDeviceManager {
         for (auto& backend : this->backends_) this->pending_refresh->pending_backends.insert(backend->type());
         is_new_pending_refresh = true;
       }
-      
+
       // wire up result feature and callback (to new or existing promise)
       this->pending_refresh->promises.emplace_back();
       future = this->pending_refresh->promises.back().get_future();
       this->pending_refresh->callbacks.push_back(std::move(on_done));
     }
-    
+
     // trigger a pending refresh, unless one is already pending
     if (is_new_pending_refresh) {
       for (auto& backend : this->backends_) backend->request_refresh();
@@ -289,8 +315,8 @@ class AudioDeviceManager {
 
 inline void register_audio_backends(AudioDeviceManager& manager) {
 #if defined(__linux__)
-  // manager.register_backend(std::make_unique<AlsaBackend>());
-  manager.register_backend(std::make_unique<PulseAudioBackend>());
+  bool success = manager.register_backend(std::make_unique<PulseAudioBackend>());
+  if (!success) manager.register_backend(std::make_unique<AlsaBackend>());  // fallback
 #elif defined(_WIN32)
   // manager.register_backend(std::make_unique<WasapiBackend>());
 #endif

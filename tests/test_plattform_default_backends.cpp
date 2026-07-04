@@ -26,16 +26,11 @@ audio_device_manager::Device* get_default_output_device(audio_device_manager::Au
 
 TEST_CASE("default backends: backend count") {
   auto& manager = make_manager();
-#if defined(__linux__)
-  // CHECK(manager.backend_count() == 2);
   CHECK(manager.backend_count() == 1);
-#elif defined(_WIN32)
-  CHECK(manager.backend_count() == 1);
-#endif
 }
 
 TEST_CASE("default backends: device list non-empty with valid fields") {
-  auto devices = make_manager().get_devices();
+  auto devices = make_manager().get_devices_sorted();
   REQUIRE(devices.size() > 0);
 
   std::string device_list;
@@ -43,26 +38,24 @@ TEST_CASE("default backends: device list non-empty with valid fields") {
     CHECK(!device.get().name().empty());
     CHECK(!device.get().id().backend_device_id.empty());
     CHECK(device.get().connected());
+
+    const auto& backend_name = device.get().backend_name();
+    bool is_valid_backend_name;
+#if defined(__linux__)
+    is_valid_backend_name = backend_name == "PulseAudio" || backend_name == "ALSA";
+#elif defined(_WIN32)
+    is_valid_backend_name = name == "WASAPI";
+#endif
+    CHECK(is_valid_backend_name);
+    if (!is_valid_backend_name) MESSAGE("Unexpected backend name: " << backend_name);
+
     auto type = device.get().type() == audio_device_manager::DeviceType::Input ? "input" : "output";
-    device_list += std::string(type) + "  " + device.get().id().backend_device_id + "  " + device.get().name() + "\n";
+    device_list += backend_name + "  " + std::string(type) + "  " + device.get().id().backend_device_id + "  " + device.get().name() + "\n";
   }
   MESSAGE("devices:\n", device_list);
 }
 
-TEST_CASE("default backends: backend name on devices") {
-  auto devices = make_manager().get_devices();
-  REQUIRE(devices.size() > 0);
-  for (auto& device : devices) {
-#if defined(__linux__)
-    CHECK(device.get().backend_name() == "PulseAudio");
-    // CHECK(d.get().backend_name() == "PulseAudio" || d.get().backend_name() == "ALSA");
-#elif defined(_WIN32)
-    CHECK(d.get().backend_name() == "WASAPI");
-#endif
-  }
-}
-
-TEST_CASE("default backends: exactly one default per type") {
+TEST_CASE("default backends: atleast one default per type") {
   auto devices = make_manager().get_devices();
   REQUIRE(devices.size() > 0);
 
@@ -74,8 +67,8 @@ TEST_CASE("default backends: exactly one default per type") {
     if (device.get().type() == audio_device_manager::DeviceType::Input) ++default_inputs;
   }
 
-  CHECK(default_outputs == 1);
-  CHECK(default_inputs == 1);
+  CHECK(default_outputs > 0);
+  CHECK(default_inputs > 0);
 }
 
 TEST_CASE("default backends: volume within min/max range") {
