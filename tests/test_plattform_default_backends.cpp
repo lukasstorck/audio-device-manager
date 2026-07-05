@@ -44,7 +44,7 @@ TEST_CASE("default backends: device list non-empty with valid fields") {
 #if defined(__linux__)
     is_valid_backend_name = backend_name == "PulseAudio" || backend_name == "ALSA";
 #elif defined(_WIN32)
-    is_valid_backend_name = name == "WASAPI";
+    is_valid_backend_name = backend_name == "WASAPI";
 #endif
     CHECK(is_valid_backend_name);
     if (!is_valid_backend_name) MESSAGE("Unexpected backend name: " << backend_name);

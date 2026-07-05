@@ -318,7 +318,7 @@ inline void register_audio_backends(AudioDeviceManager& manager) {
   bool success = manager.register_backend(std::make_unique<PulseAudioBackend>());
   if (!success) manager.register_backend(std::make_unique<AlsaBackend>());  // fallback
 #elif defined(_WIN32)
-  // manager.register_backend(std::make_unique<WasapiBackend>());
+  manager.register_backend(std::make_unique<WasapiBackend>());
 #endif
 }
 

@@ -10,6 +10,7 @@ FetchContent_MakeAvailable(doctest)
 add_executable(adm_tests
   test_mock_backend.cpp   # must be first due to doctest main initialization
   test_plattform_default_backends.cpp
+  test_multithreading.cpp
 )
 target_link_libraries(adm_tests PRIVATE ADM::ADM doctest::doctest)
 

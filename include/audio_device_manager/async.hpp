@@ -9,7 +9,15 @@ namespace audio_device_manager {
 
 class AsyncWorker {
  public:
-  AsyncWorker() : thread_([this] { this->run(); }) {}
+  /// @brief Create and start a worker thread
+  /// @param on_thread_start optional callback that runs before the main worker loop
+  /// @param on_thread_end optional callback that runs after the main worker loop
+  explicit AsyncWorker(std::function<void()> on_thread_start = nullptr, std::function<void()> on_thread_end = nullptr)
+      : thread_([this, on_thread_start = std::move(on_thread_start), on_thread_end = std::move(on_thread_end)] {
+          if (on_thread_start) on_thread_start();
+          this->run();
+          if (on_thread_end) on_thread_end();
+        }) {}
   ~AsyncWorker() {
     {
       std::lock_guard lock(this->mutex_);
