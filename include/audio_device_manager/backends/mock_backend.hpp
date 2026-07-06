@@ -7,7 +7,7 @@ namespace audio_device_manager {
 
 class MockBackend : public AudioBackend {
  public:
-  MockBackend() : AudioBackend("Mock") {}
+  MockBackend() : AudioBackend("Mock", BackendFeature::All) {}
   AudioBackendType type() const override { return AudioBackendType::Mock; }
   bool available() const override { return true; }
 

@@ -1,6 +1,7 @@
 #pragma once
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "types.hpp"
@@ -13,7 +14,8 @@ class AudioBackend {
  public:
   virtual ~AudioBackend() = default;
 
-  const std::string& name() const { return name_; }
+  const std::string& name() const { return this->name_; }
+  bool is_supported(BackendFeature feature) const { return std::to_underlying(this->supported_features_ & feature) != 0; }
   virtual AudioBackendType type() const = 0;
   virtual bool available() const        = 0;
 
@@ -44,9 +46,10 @@ class AudioBackend {
 
  private:
   const std::string name_;
+  const BackendFeature supported_features_;
 
  protected:
-  AudioBackend(char const* name) : name_(name) {}
+  AudioBackend(char const* name, BackendFeature supported_features) : name_(name), supported_features_(supported_features) {}
   std::mutex on_change_mutex_;
   BackendUpdateEventCallback on_change_;
 };

@@ -13,6 +13,10 @@
 
 namespace audio_device_manager {
 
+constexpr BackendFeature ALSA_SUPPORTED_FEATURES = BackendFeature::ListDevices | BackendFeature::ReadDeviceVolume | BackendFeature::ReadDeviceMute |
+                                                   BackendFeature::ReadDefaultDevice | BackendFeature::SetDeviceVolume | BackendFeature::SetDeviceMute |
+                                                   BackendFeature::SetDefaultDevice;  // | BackendFeature::DeviceChangeNotifications // TODO: needs polling
+
 // ALSA has no daemon and no push-notification mechanism for device/mixer
 // changes usable here without a persistent poll thread, so this backend is
 // purely pull-based: request_refresh() re-enumerates cards + mixer elements
@@ -21,7 +25,7 @@ namespace audio_device_manager {
 // handle just for the duration of the call.
 class AlsaBackend : public AudioBackend {
  public:
-  AlsaBackend() : AudioBackend("ALSA") { this->try_init(); }
+  AlsaBackend() : AudioBackend("ALSA", ALSA_SUPPORTED_FEATURES) { this->try_init(); }
 
   AudioBackendType type() const override { return AudioBackendType::Alsa; }
   bool available() const override { return this->available_; }

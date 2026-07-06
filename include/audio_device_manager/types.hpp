@@ -9,6 +9,32 @@ namespace audio_device_manager {
 enum class DeviceType { Input, Output };
 enum class AudioBackendType { Mock, PulseAudio, Alsa, Wasapi };
 
+enum class BackendFeature : unsigned {
+  ListDevices               = 1 << 0,  /// backend supports enumerating all available devices
+  ReadDeviceVolume          = 1 << 1,  /// backend supports reading the volume of a device
+  ReadDeviceMute            = 1 << 2,  /// backend supports reading the mute state of a device
+  ReadDefaultDevice         = 1 << 3,  /// backend supports reading the default device
+  SetDeviceVolume           = 1 << 4,  /// backend supports setting the volume of a device
+  SetDeviceMute             = 1 << 5,  /// backend supports setting the mute state of a device
+  SetDefaultDevice          = 1 << 6,  /// backend supports setting the default device
+  DeviceChangeNotifications = 1 << 7,  /// backend supports sending notifications of device changes
+
+  All = ListDevices | ReadDeviceVolume | ReadDeviceMute | ReadDefaultDevice | SetDeviceVolume | SetDeviceMute | SetDefaultDevice | DeviceChangeNotifications,
+};
+
+constexpr BackendFeature operator|(BackendFeature lhs, BackendFeature rhs) {
+  return static_cast<BackendFeature>(std::to_underlying(lhs) | std::to_underlying(rhs));
+}
+
+constexpr BackendFeature operator&(BackendFeature lhs, BackendFeature rhs) {
+  return static_cast<BackendFeature>(std::to_underlying(lhs) & std::to_underlying(rhs));
+}
+
+constexpr BackendFeature& operator|=(BackendFeature& lhs, BackendFeature rhs) {
+  lhs = lhs | rhs;
+  return lhs;
+}
+
 struct DeviceId {
   AudioBackendType backend_type;
   std::string backend_device_id;  // stable id as reported by the backend

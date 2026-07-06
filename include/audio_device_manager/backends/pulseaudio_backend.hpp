@@ -15,7 +15,7 @@ namespace audio_device_manager {
 
 class PulseAudioBackend : public AudioBackend {
  public:
-  PulseAudioBackend() : AudioBackend("PulseAudio") { this->try_init(); }
+  PulseAudioBackend() : AudioBackend("PulseAudio", BackendFeature::All) { this->try_init(); }
 
   ~PulseAudioBackend() override {
     if (!this->mainloop_) return;

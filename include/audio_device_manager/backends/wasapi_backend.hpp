@@ -244,7 +244,7 @@ struct VolumeSubscription {
 class WasapiBackend : public AudioBackend {
  public:
   WasapiBackend()
-      : AudioBackend("WASAPI"),
+      : AudioBackend("WASAPI", BackendFeature::All),
         worker_([this] { this->com_initialized_ = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED)); },
                 [this] {
                   if (this->com_initialized_) CoUninitialize();

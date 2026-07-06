@@ -7,6 +7,7 @@ A cross-plattform easy-to-use library for querying and controlling audio device 
   - one file for each backend for backend specific tests based on available features
   - one file for general tests, e.g. ensuring only one backend is loaded (i.e. ALSA fallback)
 - [ ] add device feature flags, so the user can query if a device / backend support e.g. default devices
+  - use feature flags in tests to determine if a test should be successful or return `unsupported`
 - [ ] unify more common functions in the abstract base class `AudioBackend`
   - mandatory common worker thread
   - every function called from outside (e.g. for device refresh or to set volume) should be called a request and be sent to the worker thread
