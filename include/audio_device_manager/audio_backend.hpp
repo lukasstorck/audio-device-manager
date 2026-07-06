@@ -8,8 +8,6 @@
 
 namespace audio_device_manager {
 
-using BackendUpdateEventCallback = std::function<void(std::vector<DeviceSnapshot>)>;
-
 class AudioBackend {
  public:
   virtual ~AudioBackend() = default;

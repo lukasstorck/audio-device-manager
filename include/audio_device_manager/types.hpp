@@ -70,6 +70,7 @@ struct CommandResult {
   explicit operator bool() const { return status == CommandStatus::Ok; }
 };
 
-using CommandResultFuture = std::future<CommandResult>;
+using CommandResultFuture        = std::future<CommandResult>;
+using BackendUpdateEventCallback = std::function<void(std::vector<DeviceSnapshot>)>;
 
 }  // namespace audio_device_manager
