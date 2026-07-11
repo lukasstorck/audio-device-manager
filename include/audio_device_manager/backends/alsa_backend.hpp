@@ -7,15 +7,14 @@
 #include <mutex>
 #include <unordered_map>
 
-#include "../async.hpp"
 #include "../audio_backend.hpp"
 #include "dynamic_library.hpp"
 
 namespace audio_device_manager {
 
 constexpr BackendFeature ALSA_SUPPORTED_FEATURES = BackendFeature::ListDevices | BackendFeature::ReadDeviceVolume | BackendFeature::ReadDeviceMute |
-                                                   BackendFeature::ReadDefaultDevice | BackendFeature::SetDeviceVolume | BackendFeature::SetDeviceMute |
-                                                   BackendFeature::SetDefaultDevice;  // | BackendFeature::DeviceChangeNotifications // TODO: needs polling
+                                                   BackendFeature::ReadDefaultDevice | BackendFeature::SetDeviceVolume | BackendFeature::SetDeviceMute;
+// | BackendFeature::DeviceChangeNotifications // TODO: needs polling
 
 // ALSA has no daemon and no push-notification mechanism for device/mixer
 // changes usable here without a persistent poll thread, so this backend is
@@ -30,45 +29,21 @@ class AlsaBackend : public AudioBackend {
   AudioBackendType type() const override { return AudioBackendType::Alsa; }
   bool available() const override { return this->available_; }
 
-  void request_refresh() override {
-    this->worker_.post([this] { this->refresh_devices(); });
-  }
-
-  CommandResultFuture set_volume_async(const std::string& device_id, float volume, std::function<void(CommandResult)> on_done = nullptr) override {
-    auto promise = std::make_shared<std::promise<CommandResult>>();
-    auto future  = promise->get_future();
-    this->worker_.post([this, device_id, volume, on_done = std::move(on_done), promise] {
-      auto result = this->run_set_volume(device_id, volume);
-      if (on_done) on_done(result);
-      promise->set_value(result);
-    });
-    return future;
-  }
-  CommandResultFuture set_mute_async(const std::string& device_id, bool muted, std::function<void(CommandResult)> on_done = nullptr) override {
-    auto promise = std::make_shared<std::promise<CommandResult>>();
-    auto future  = promise->get_future();
-    this->worker_.post([this, device_id, muted, on_done = std::move(on_done), promise] {
-      auto result = this->run_set_mute(device_id, muted);
-      if (on_done) on_done(result);
-      promise->set_value(result);
-    });
-    return future;
-  }
-  CommandResultFuture set_default_async(const std::string& device_id, std::function<void(CommandResult)> on_done = nullptr) override {
-    auto promise = std::make_shared<std::promise<CommandResult>>();
-    auto future  = promise->get_future();
-    this->worker_.post([this, device_id, on_done = std::move(on_done), promise] {
-      // ALSA has no OS-level "default device" concept to switch, unlike
-      // PulseAudio's default sink/source or WASAPI's default endpoint.
-      CommandResult result{CommandStatus::Unsupported, "ALSA has no default-device API"};
-      if (!this->lookup(device_id)) result = {CommandStatus::DeviceNotFound, "device " + device_id + " not found"};
-      if (on_done) on_done(result);
-      promise->set_value(result);
-    });
-    return future;
-  }
-
  private:
+  CommandResult handle_set_volume(const std::string& device_id, float volume) override { return this->run_set_volume(device_id, volume); }
+
+  CommandResult handle_set_mute(const std::string& device_id, bool muted) override { return this->run_set_mute(device_id, muted); }
+
+  CommandResult handle_set_default(const std::string& device_id) override {
+    // ALSA has no OS-level "default device" concept
+    return {CommandStatus::Unsupported, "ALSA has no default-device API"};
+  }
+
+  CommandResult handle_refresh() override {
+    this->refresh_devices();
+    return {};
+  }
+
   struct DeviceCacheEntry {
     int card = -1;
     std::string elem_name;
@@ -401,8 +376,6 @@ class AlsaBackend : public AudioBackend {
   decltype(&::snd_mixer_selem_get_capture_switch) selem_get_capture_switch_               = nullptr;
   decltype(&::snd_mixer_selem_set_playback_switch_all) selem_set_playback_switch_all_     = nullptr;
   decltype(&::snd_mixer_selem_set_capture_switch_all) selem_set_capture_switch_all_       = nullptr;
-
-  AsyncWorker worker_;  // NOTE: declared last, so worker will be destructed before device cache and its mutex, which might be used by worker
 };
 
 }  // namespace audio_device_manager

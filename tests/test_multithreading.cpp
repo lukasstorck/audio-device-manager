@@ -49,7 +49,7 @@ TEST_CASE("multi-threading: OS-level device change on one manager is observed by
     // must be able to time out and fail rather than hang forever.
     auto wait_until = [&](auto predicate) {
       std::unique_lock lock(mtx);
-      return cv.wait_for(lock, std::chrono::seconds(5), predicate);
+      return cv.wait_for(lock, std::chrono::seconds(1), predicate);
     };
 
     // --- volume ---

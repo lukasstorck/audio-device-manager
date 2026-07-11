@@ -28,7 +28,6 @@
 #include <utility>
 #include <vector>
 
-#include "../async.hpp"
 #include "../audio_backend.hpp"
 
 namespace audio_device_manager {
@@ -230,7 +229,7 @@ class VolumeCallback : public IAudioEndpointVolumeCallback {
   std::atomic<ULONG> ref_count_{1};
 };
 
-// One of these lives per currently-known endpoint. Keeps the activated
+// One VolumeSubscription lives per currently-known endpoint. Keeps the activated
 // IAudioEndpointVolume alive (required for the callback registration to stay
 // valid) alongside the callback object itself, so both can be unregistered
 // and torn down together when the device disappears or the backend shuts down.
@@ -243,14 +242,7 @@ struct VolumeSubscription {
 
 class WasapiBackend : public AudioBackend {
  public:
-  WasapiBackend()
-      : AudioBackend("WASAPI", BackendFeature::All),
-        worker_([this] { this->com_initialized_ = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED)); },
-                [this] {
-                  if (this->com_initialized_) CoUninitialize();
-                }) {
-    this->try_init();
-  }
+  WasapiBackend() : WasapiBackend(std::make_shared<bool>(false)) {}
 
   ~WasapiBackend() override {
     std::promise<void> released;
@@ -275,42 +267,68 @@ class WasapiBackend : public AudioBackend {
   AudioBackendType type() const override { return AudioBackendType::Wasapi; }
   bool available() const override { return this->available_; }
 
-  void request_refresh() override {
-    this->worker_.post([this] { this->refresh_devices(); });
-  }
-
-  CommandResultFuture set_volume_async(const std::string& device_id, float volume, std::function<void(CommandResult)> on_done = nullptr) override {
-    auto promise = std::make_shared<std::promise<CommandResult>>();
-    auto future  = promise->get_future();
-    this->worker_.post([this, device_id, volume, on_done = std::move(on_done), promise] {
-      auto result = this->run_set_volume(device_id, volume);
-      if (on_done) on_done(result);
-      promise->set_value(result);
-    });
-    return future;
-  }
-  CommandResultFuture set_mute_async(const std::string& device_id, bool muted, std::function<void(CommandResult)> on_done = nullptr) override {
-    auto promise = std::make_shared<std::promise<CommandResult>>();
-    auto future  = promise->get_future();
-    this->worker_.post([this, device_id, muted, on_done = std::move(on_done), promise] {
-      auto result = this->run_set_mute(device_id, muted);
-      if (on_done) on_done(result);
-      promise->set_value(result);
-    });
-    return future;
-  }
-  CommandResultFuture set_default_async(const std::string& device_id, std::function<void(CommandResult)> on_done = nullptr) override {
-    auto promise = std::make_shared<std::promise<CommandResult>>();
-    auto future  = promise->get_future();
-    this->worker_.post([this, device_id, on_done = std::move(on_done), promise] {
-      auto result = this->run_set_default(device_id);
-      if (on_done) on_done(result);
-      promise->set_value(result);
-    });
-    return future;
-  }
-
  private:
+  CommandResult handle_set_volume(const std::string& device_id, float volume) override {
+    auto device = this->find_device(device_id);
+    if (!device) return {CommandStatus::DeviceNotFound, "device " + device_id + " not found"};
+
+    detail::ComPtr<IAudioEndpointVolume> endpoint_volume;
+    HRESULT hr = device->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(endpoint_volume.put()));
+    if (FAILED(hr)) return {CommandStatus::BackendError, detail::hresult_to_string(hr)};
+
+    hr = endpoint_volume->SetMasterVolumeLevelScalar(std::clamp(volume, 0.f, 1.f), nullptr);
+    if (FAILED(hr)) return {CommandStatus::BackendError, detail::hresult_to_string(hr)};
+
+    return {};
+  }
+
+  CommandResult handle_set_mute(const std::string& device_id, bool muted) override {
+    auto device = this->find_device(device_id);
+    if (!device) return {CommandStatus::DeviceNotFound, "device " + device_id + " not found"};
+
+    detail::ComPtr<IAudioEndpointVolume> endpoint_volume;
+    HRESULT hr = device->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(endpoint_volume.put()));
+    if (FAILED(hr)) return {CommandStatus::BackendError, detail::hresult_to_string(hr)};
+
+    hr = endpoint_volume->SetMute(muted, nullptr);
+    if (FAILED(hr)) return {CommandStatus::BackendError, detail::hresult_to_string(hr)};
+
+    return {};
+  }
+
+  CommandResult handle_set_default(const std::string& device_id) override {
+    auto device = this->find_device(device_id);
+    if (!device) return {CommandStatus::DeviceNotFound, "device " + device_id + " not found"};
+
+    detail::ComPtr<detail::IPolicyConfig> policy_config;
+    HRESULT hr =
+        CoCreateInstance(detail::kPolicyConfigClientClsid, nullptr, CLSCTX_ALL, detail::kPolicyConfigIid, reinterpret_cast<void**>(policy_config.put()));
+    if (FAILED(hr)) return {CommandStatus::Unsupported, "IPolicyConfig unavailable: " + detail::hresult_to_string(hr)};
+
+    std::wstring wide_id = detail::utf8_to_wide(device_id);
+    // set default for all roles
+    for (ERole role : {eConsole, eMultimedia, eCommunications}) {
+      hr = policy_config->SetDefaultEndpoint(wide_id.c_str(), role);
+      if (FAILED(hr)) return {CommandStatus::BackendError, detail::hresult_to_string(hr)};
+    }
+
+    return {};
+  }
+
+  CommandResult handle_refresh() override {
+    this->refresh_devices();
+    return {};
+  }
+
+  explicit WasapiBackend(std::shared_ptr<bool> com_ok)
+      : AudioBackend(
+            "WASAPI", BackendFeature::All, [com_ok] { *com_ok = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED)); },
+            [com_ok] {
+              if (*com_ok) CoUninitialize();
+            }) {
+    this->try_init();
+  }
+
   void try_init() {
     std::promise<bool> probe;
     auto probe_future = probe.get_future();
@@ -440,61 +458,10 @@ class WasapiBackend : public AudioBackend {
     return device;
   }
 
-  CommandResult run_set_volume(const std::string& device_id, float volume) {
-    auto device = this->find_device(device_id);
-    if (!device) return {CommandStatus::DeviceNotFound, "device " + device_id + " not found"};
-
-    detail::ComPtr<IAudioEndpointVolume> endpoint_volume;
-    HRESULT hr = device->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(endpoint_volume.put()));
-    if (FAILED(hr)) return {CommandStatus::BackendError, detail::hresult_to_string(hr)};
-
-    hr = endpoint_volume->SetMasterVolumeLevelScalar(std::clamp(volume, 0.f, 1.f), nullptr);
-    if (FAILED(hr)) return {CommandStatus::BackendError, detail::hresult_to_string(hr)};
-
-    return {};
-  }
-
-  CommandResult run_set_mute(const std::string& device_id, bool muted) {
-    auto device = this->find_device(device_id);
-    if (!device) return {CommandStatus::DeviceNotFound, "device " + device_id + " not found"};
-
-    detail::ComPtr<IAudioEndpointVolume> endpoint_volume;
-    HRESULT hr = device->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(endpoint_volume.put()));
-    if (FAILED(hr)) return {CommandStatus::BackendError, detail::hresult_to_string(hr)};
-
-    hr = endpoint_volume->SetMute(muted, nullptr);
-    if (FAILED(hr)) return {CommandStatus::BackendError, detail::hresult_to_string(hr)};
-
-    // Same as above: the mute change is picked up via IAudioEndpointVolumeCallback.
-    return {};
-  }
-
-  CommandResult run_set_default(const std::string& device_id) {
-    auto device = this->find_device(device_id);
-    if (!device) return {CommandStatus::DeviceNotFound, "device " + device_id + " not found"};
-
-    detail::ComPtr<detail::IPolicyConfig> policy_config;
-    HRESULT hr =
-        CoCreateInstance(detail::kPolicyConfigClientClsid, nullptr, CLSCTX_ALL, detail::kPolicyConfigIid, reinterpret_cast<void**>(policy_config.put()));
-    if (FAILED(hr)) return {CommandStatus::Unsupported, "IPolicyConfig unavailable: " + detail::hresult_to_string(hr)};
-
-    std::wstring wide_id = detail::utf8_to_wide(device_id);
-    // set default for all roles
-    for (ERole role : {eConsole, eMultimedia, eCommunications}) {
-      hr = policy_config->SetDefaultEndpoint(wide_id.c_str(), role);
-      if (FAILED(hr)) return {CommandStatus::BackendError, detail::hresult_to_string(hr)};
-    }
-
-    return {};
-  }
-
   bool available_ = false;
   detail::ComPtr<IMMDeviceEnumerator> enumerator_;
   detail::ComPtr<detail::NotificationClient> notification_client_;
   std::unordered_map<std::string, detail::VolumeSubscription> volume_subscriptions_;
-  bool com_initialized_ = false;
-
-  AsyncWorker worker_;
 };
 
 }  // namespace audio_device_manager

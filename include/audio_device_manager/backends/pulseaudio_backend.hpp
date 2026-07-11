@@ -34,32 +34,58 @@ class PulseAudioBackend : public AudioBackend {
   AudioBackendType type() const override { return AudioBackendType::PulseAudio; }
   bool available() const override { return this->available_; }
 
-  void request_refresh() override {
-    if (!this->available_) return;
+ private:
+  CommandResult handle_set_volume(const std::string& device_id, float volume) override {
+    DeviceCacheEntry entry;
+    if (!this->lookup_device(device_id, entry)) return {CommandStatus::DeviceNotFound, "device " + device_id + " not found"};
+
+    pa_cvolume cvol;
+    pa_volume_t pa_vol = static_cast<pa_volume_t>(volume * static_cast<float>(PA_VOLUME_NORM));
+    this->cvolume_set_(&cvol, entry.channels > 0 ? entry.channels : 1, pa_vol);
+
+    SuccessCallbackData cb_data{this};
+    MainloopLockGuard lock(this);
+    pa_operation* op = entry.type == DeviceType::Output
+                           ? this->context_set_sink_volume_by_name_(this->context_, device_id.c_str(), &cvol, &PulseAudioBackend::success_callback, &cb_data)
+                           : this->context_set_source_volume_by_name_(this->context_, device_id.c_str(), &cvol, &PulseAudioBackend::success_callback, &cb_data);
+    return this->wait_operation(op, &cb_data.backend_success);
+  }
+
+  CommandResult handle_set_mute(const std::string& device_id, bool muted) override {
+    DeviceCacheEntry entry;
+    if (!this->lookup_device(device_id, entry)) return {CommandStatus::DeviceNotFound, "device " + device_id + " not found"};
+
+    SuccessCallbackData cb_data{this};
+    MainloopLockGuard lock(this);
+    pa_operation* op =
+        entry.type == DeviceType::Output
+            ? this->context_set_sink_mute_by_name_(this->context_, device_id.c_str(), muted ? 1 : 0, &PulseAudioBackend::success_callback, &cb_data)
+            : this->context_set_source_mute_by_name_(this->context_, device_id.c_str(), muted ? 1 : 0, &PulseAudioBackend::success_callback, &cb_data);
+    return this->wait_operation(op, &cb_data.backend_success);
+  }
+
+  CommandResult handle_set_default(const std::string& device_id) override {
+    DeviceCacheEntry entry;
+    if (!this->lookup_device(device_id, entry)) return {CommandStatus::DeviceNotFound, "device " + device_id + " not found"};
+
+    SuccessCallbackData cb_data{this};
+    MainloopLockGuard lock(this);
+    pa_operation* op = entry.type == DeviceType::Output
+                           ? this->context_set_default_sink_(this->context_, device_id.c_str(), &PulseAudioBackend::success_callback, &cb_data)
+                           : this->context_set_default_source_(this->context_, device_id.c_str(), &PulseAudioBackend::success_callback, &cb_data);
+    return this->wait_operation(op, &cb_data.backend_success);
+  }
+
+  CommandResult handle_refresh() override {
+    if (!this->available_) return {};
     MainloopLockGuard lock(this);
     this->refresh_devices();
+    return {};
   }
 
-  CommandResultFuture set_volume_async(const std::string& device_id, float volume, std::function<void(CommandResult)> on_done = nullptr) override {
-    return this->run_volume_command(device_id, volume, std::move(on_done));
-  }
-  CommandResultFuture set_mute_async(const std::string& device_id, bool muted, std::function<void(CommandResult)> on_done = nullptr) override {
-    return this->run_mute_command(device_id, muted, std::move(on_done));
-  }
-  CommandResultFuture set_default_async(const std::string& device_id, std::function<void(CommandResult)> on_done = nullptr) override {
-    return this->run_default_command(device_id, std::move(on_done));
-  }
-
- private:
   struct DeviceCacheEntry {
     DeviceType type;
     uint8_t channels;
-  };
-
-  // command continuation state shared with pulse audio success_callback
-  struct CommandOp {
-    std::shared_ptr<std::promise<CommandResult>> promise;
-    std::function<void(CommandResult)> on_done;
   };
 
   void try_init() {
@@ -286,78 +312,28 @@ class PulseAudioBackend : public AudioBackend {
     return true;
   }
 
-  static CommandResultFuture make_not_found(const std::string& device_id, std::function<void(CommandResult)> on_done) {
-    std::promise<CommandResult> promise;
-    auto future = promise.get_future();
-    CommandResult result{CommandStatus::DeviceNotFound, "device " + device_id + " not found"};
-    if (on_done) on_done(result);
-    promise.set_value(result);
-    return future;
+  static void success_callback(pa_context* context, int success, void* userdata) {
+    auto* self            = static_cast<SuccessCallbackData*>(userdata);
+    self->backend_success = success != 0;
+    self->backend->mainloop_signal_(self->backend->mainloop_, 0);
   }
 
-  static void success_callback(pa_context*, int success, void* userdata) {
-    auto* op = static_cast<CommandOp*>(userdata);
-    CommandResult result{};
-    if (!success) {
-      result.status = CommandStatus::BackendError;
-      result.detail = "pulseaudio command failed";
-    }
-    if (op->on_done) op->on_done(result);
-    op->promise->set_value(result);
-    delete op;
-  }
+  struct SuccessCallbackData {
+    PulseAudioBackend* backend;
+    bool backend_success = false;
+  };
 
-  CommandResultFuture run_volume_command(const std::string& device_id, float volume, std::function<void(CommandResult)> on_done) {
-    DeviceCacheEntry entry;
-    if (!this->lookup_device(device_id, entry)) return make_not_found(device_id, std::move(on_done));
-
-    auto promise = std::make_shared<std::promise<CommandResult>>();
-    auto future  = promise->get_future();
-    auto* op     = new CommandOp{promise, std::move(on_done)};
-
-    pa_cvolume cvol;
-    pa_volume_t pa_vol = static_cast<pa_volume_t>(volume * static_cast<float>(PA_VOLUME_NORM));
-    this->cvolume_set_(&cvol, entry.channels > 0 ? entry.channels : 1, pa_vol);
-
-    MainloopLockGuard lock(this);
-    pa_operation* pa_op = entry.type == DeviceType::Output
-                              ? this->context_set_sink_volume_by_name_(this->context_, device_id.c_str(), &cvol, &PulseAudioBackend::success_callback, op)
-                              : this->context_set_source_volume_by_name_(this->context_, device_id.c_str(), &cvol, &PulseAudioBackend::success_callback, op);
-    if (pa_op) this->operation_unref_(pa_op);
-    return future;
-  }
-
-  CommandResultFuture run_mute_command(const std::string& device_id, bool muted, std::function<void(CommandResult)> on_done) {
-    DeviceCacheEntry entry;
-    if (!this->lookup_device(device_id, entry)) return make_not_found(device_id, std::move(on_done));
-
-    auto promise = std::make_shared<std::promise<CommandResult>>();
-    auto future  = promise->get_future();
-    auto* op     = new CommandOp{promise, std::move(on_done)};
-
-    MainloopLockGuard lock(this);
-    pa_operation* pa_op =
-        entry.type == DeviceType::Output
-            ? this->context_set_sink_mute_by_name_(this->context_, device_id.c_str(), muted ? 1 : 0, &PulseAudioBackend::success_callback, op)
-            : this->context_set_source_mute_by_name_(this->context_, device_id.c_str(), muted ? 1 : 0, &PulseAudioBackend::success_callback, op);
-    if (pa_op) this->operation_unref_(pa_op);
-    return future;
-  }
-
-  CommandResultFuture run_default_command(const std::string& device_id, std::function<void(CommandResult)> on_done) {
-    DeviceCacheEntry entry;
-    if (!this->lookup_device(device_id, entry)) return make_not_found(device_id, std::move(on_done));
-
-    auto promise = std::make_shared<std::promise<CommandResult>>();
-    auto future  = promise->get_future();
-    auto* op     = new CommandOp{promise, std::move(on_done)};
-
-    MainloopLockGuard lock(this);
-    pa_operation* pa_op = entry.type == DeviceType::Output
-                              ? this->context_set_default_sink_(this->context_, device_id.c_str(), &PulseAudioBackend::success_callback, op)
-                              : this->context_set_default_source_(this->context_, device_id.c_str(), &PulseAudioBackend::success_callback, op);
-    if (pa_op) this->operation_unref_(pa_op);
-    return future;
+  // Blocks (releasing the mainloop lock internally via mainloop_wait_) until
+  // `op` reaches a terminal state. Must be called while holding MainloopLockGuard.
+  // `success` must point at the flag written by success_callback for this op.
+  CommandResult wait_operation(pa_operation* op, const bool* success) {
+    if (!op) return {CommandStatus::BackendError, "failed to create pulseaudio operation"};
+    while (this->operation_get_state_(op) == PA_OPERATION_RUNNING) this->mainloop_wait_(this->mainloop_);
+    bool completed = this->operation_get_state_(op) == PA_OPERATION_DONE;
+    this->operation_unref_(op);
+    if (!completed) return {CommandStatus::BackendError, "pulseaudio operation was cancelled"};
+    if (!*success) return {CommandStatus::BackendError, "pulseaudio command failed"};
+    return {};
   }
 
   DynamicLibrary lib_{"libpulse.so.0"};

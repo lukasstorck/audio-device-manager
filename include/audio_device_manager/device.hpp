@@ -48,7 +48,7 @@ class Device {
   /// @return Future representing the command result. Call .get() to wait for
   ///         completion or discard the future for fire-and-forget execution.
   CommandResultFuture set_volume_async(float volume, std::function<void(CommandResult)> on_done = nullptr) {
-    return backend_.set_volume_async(id_.backend_device_id, volume, std::move(on_done));
+    return backend_.request_set_volume(id_.backend_device_id, volume, std::move(on_done));
   }
 
   /// Asynchronously change this device's mute state.
@@ -62,7 +62,7 @@ class Device {
   /// @return Future representing the command result. Call .get() to wait for
   ///         completion or discard the future for fire-and-forget execution.
   CommandResultFuture set_mute_async(bool muted, std::function<void(CommandResult)> on_done = nullptr) {
-    return backend_.set_mute_async(id_.backend_device_id, muted, std::move(on_done));
+    return backend_.request_set_mute(id_.backend_device_id, muted, std::move(on_done));
   }
 
   /// Asynchronously make this device the system default.
@@ -75,7 +75,7 @@ class Device {
   /// @return Future representing the command result. Call .get() to wait for
   ///         completion or discard the future for fire-and-forget execution.
   CommandResultFuture set_default_async(std::function<void(CommandResult)> on_done = nullptr) {
-    return backend_.set_default_async(id_.backend_device_id, std::move(on_done));
+    return backend_.request_set_default(id_.backend_device_id, std::move(on_done));
   }
 
   /// Set this device's output volume.
@@ -84,7 +84,7 @@ class Device {
   ///
   /// @param volume Target volume. Valid range depends on the backend.
   /// @return Result of the completed command.
-  CommandResult set_volume(float volume) { return set_volume_async(volume).get(); }
+  CommandResult set_volume(float volume) { return this->set_volume_async(volume).get(); }
 
   /// Change this device's mute state.
   ///
@@ -92,14 +92,14 @@ class Device {
   ///
   /// @param muted True to mute the device, false to unmute.
   /// @return Result of the completed command.
-  CommandResult set_mute(bool muted) { return set_mute_async(muted).get(); }
+  CommandResult set_mute(bool muted) { return this->set_mute_async(muted).get(); }
 
   /// Make this device the system default.
   ///
   /// Blocks until the internal async backend command completes.
   ///
   /// @return Result of the completed command.
-  CommandResult set_default() { return set_default_async().get(); }
+  CommandResult set_default() { return this->set_default_async().get(); }
 
  private:
   friend class AudioDeviceManager;  // allow AudioDeviceManager to merge snapshots

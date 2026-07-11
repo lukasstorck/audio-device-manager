@@ -15,4 +15,5 @@ add_executable(adm_tests
 target_link_libraries(adm_tests PRIVATE ADM::ADM doctest::doctest)
 
 include(${doctest_SOURCE_DIR}/scripts/cmake/doctest.cmake)
-doctest_discover_tests(adm_tests)
+# guard each test with a maximum of 5 seconds timeout
+doctest_discover_tests(adm_tests PROPERTIES TIMEOUT 5)
