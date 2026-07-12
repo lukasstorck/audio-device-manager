@@ -3,17 +3,17 @@
 A cross-plattform easy-to-use library for querying and controlling audio device settings.
 
 ## TODO
+- [ ] fix mock backend, ensure per device type default
 - [ ] create / split backend tests
   - one file for each backend for backend specific tests based on available features
   - one file for general tests, e.g. ensuring only one backend is loaded (i.e. ALSA fallback)
 - [ ] add device feature flags, so the user can query if a device / backend support e.g. default devices
   - use feature flags in tests to determine if a test should be successful or return `unsupported`
-- [ ] unify more common functions in the abstract base class `AudioBackend`
-  - mandatory common worker thread
-  - every function called from outside (e.g. for device refresh or to set volume) should be called a request and be sent to the worker thread
-  - maybe a common handle_request(fn) function that has callback to specific handlers but also manages promises/futures and on_done callbacks
-  - abstract functions that are executed on the worker thread (e.g. `handle_set_volume` or `handle_device_refresh`)
 - [ ] add poll thread for alsa backend to detect os audio device changes
+- [ ] let all backend functions that interact with the OS be called with a timeout (which should be configurable), i.e. all handle_* functions
+  - implement globally for all backends in the abstract class
+  - return `timeout` error code when timeout occurs, then try to cancle the worker job so that other calls can be handled
+  - timeout should be low, as all calls should be handled fairly fast by the os
 
 ## Notes
 - for the time being do not implement pipewire backend, not needed due to pipewire-pulse compatibility layer
