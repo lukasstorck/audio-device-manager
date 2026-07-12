@@ -3,7 +3,6 @@
 A cross-plattform easy-to-use library for querying and controlling audio device settings.
 
 ## TODO
-- [ ] fix mock backend, ensure per device type default
 - [ ] create / split backend tests
   - one file for each backend for backend specific tests based on available features
   - one file for general tests, e.g. ensuring only one backend is loaded (i.e. ALSA fallback)

@@ -21,16 +21,24 @@ class MockBackend : public AudioBackend {
 
  private:
   CommandResult handle_set_volume(const std::string& device_id, float volume) override {
-    return this->mutate_device(device_id, [volume](DeviceSnapshot& snap) { snap.volume = volume; });
+    return this->mutate_device(device_id, [volume](DeviceSnapshot& target, std::vector<DeviceSnapshot>&) { target.volume = volume; });
   }
+
   CommandResult handle_set_mute(const std::string& device_id, bool muted) override {
-    return this->mutate_device(device_id, [muted](DeviceSnapshot& snap) { snap.muted = muted; });
+    return this->mutate_device(device_id, [muted](DeviceSnapshot& target, std::vector<DeviceSnapshot>&) { target.muted = muted; });
   }
+
   CommandResult handle_set_default(const std::string& device_id) override {
-    return this->mutate_device(
-        device_id,
-        /*mutate_target=*/[](DeviceSnapshot& snap) { snap.is_default = true; },
-        /*mutate_others=*/[](DeviceSnapshot& snap) { snap.is_default = false; });  // enforce exclusivity, mirrors real backends
+    return this->mutate_device(device_id, [](DeviceSnapshot& target, std::vector<DeviceSnapshot>& all_snapshots) {
+      DeviceType target_type = target.type;
+      for (auto& snap : all_snapshots) {
+        // only touch devices of the same type as the target
+        if (snap.type != target_type) continue;
+
+        // set default if snapshot is the target device, otherwise clear it
+        snap.is_default = (snap.backend_device_id == target.backend_device_id);
+      }
+    });
   }
 
   CommandResult handle_refresh() override {
@@ -43,17 +51,14 @@ class MockBackend : public AudioBackend {
     return {};
   }
 
-  using Mutator = std::function<void(DeviceSnapshot&)>;
+  using Mutator = std::function<void(DeviceSnapshot& target, std::vector<DeviceSnapshot>& all_snapshots)>;
 
-  /// @brief Locate a device by id and apply a mutation to it, optionally mutating every
-  /// other device first, then push the resulting state exactly once.
+  /// @brief Locate a stored device snapshot by id and apply a mutation to it and other snapshots, then push the resulting state
   ///
   /// @param device_id id of the device to mutate
-  /// @param mutate_target mutation applied to the target device
-  /// @param mutate_others optional mutation applied to every device other than the target;
-  ///                      skipped entirely if the target device is not found
+  /// @param mutate_callback mutation applied to the snapshots
   /// @return `DeviceNotFound` if no device with `device_id` exists, `Ok` otherwise
-  CommandResult mutate_device(const std::string& device_id, Mutator mutate_target, Mutator mutate_others = nullptr) {
+  CommandResult mutate_device(const std::string& device_id, Mutator mutate_callback) {
     CommandResult result{};
     std::vector<DeviceSnapshot> snapshot_copy;
     {
@@ -65,11 +70,7 @@ class MockBackend : public AudioBackend {
         return result;
       }
 
-      if (mutate_others) {
-        for (auto& snap : this->snapshots_)
-          if (snap.backend_device_id != device_id) mutate_others(snap);
-      }
-      mutate_target(*it);
+      mutate_callback(*it, this->snapshots_);
 
       snapshot_copy = this->snapshots_;
     }
