@@ -9,6 +9,7 @@ FetchContent_MakeAvailable(doctest)
 
 add_executable(adm_tests
   test_mock_backend.cpp   # must be first due to doctest main initialization
+  test_common_backend.cpp
   test_plattform_default_backends.cpp
   test_multithreading.cpp
 )

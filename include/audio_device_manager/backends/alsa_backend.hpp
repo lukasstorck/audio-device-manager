@@ -13,7 +13,7 @@
 namespace audio_device_manager {
 
 constexpr BackendFeature ALSA_SUPPORTED_FEATURES = BackendFeature::ListDevices | BackendFeature::ReadDeviceVolume | BackendFeature::ReadDeviceMute |
-                                                   BackendFeature::ReadDefaultDevice | BackendFeature::SetDeviceVolume | BackendFeature::SetDeviceMute;
+                                                   BackendFeature::SetDeviceVolume | BackendFeature::SetDeviceMute;
 // | BackendFeature::DeviceChangeNotifications // TODO: needs polling
 
 // ALSA has no daemon and no push-notification mechanism for device/mixer

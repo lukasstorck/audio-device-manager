@@ -154,8 +154,8 @@ class AudioDeviceManager {
   /// Asynchronously requests all backends to report a freshed devices.
   ///
   /// Returns immediately. The returned future resolves once all backends have
-  /// fired their update event in response. `on_done`, if given, fires on the
-  /// thread that delivers the last backend acknowledgement.
+  /// acknowledged completion of the refresh with `acknowledge_backend()` via
+  /// `on_done`. Fires on the thread that delivers the last backend acknowledgement.
   CommandResultFuture refresh_async(std::function<void(CommandResult)> on_done = nullptr) {
     bool is_new_pending_refresh = false;
     std::future<CommandResult> future;
@@ -187,7 +187,10 @@ class AudioDeviceManager {
 
     // trigger a pending refresh, unless one is already pending
     if (is_new_pending_refresh) {
-      for (auto& backend : this->backends_) backend->request_refresh();
+      for (auto& backend : this->backends_) {
+        AudioBackendType type = backend->type();
+        backend->request_refresh([this, type](CommandResult) { this->acknowledge_backend(type); });
+      }
     }
 
     return future;
@@ -250,7 +253,6 @@ class AudioDeviceManager {
       }
     }  // lock released before notifying
 
-    this->acknowledge_backend(backend.type());
     if (any_change) this->schedule_notify();
   }
   void schedule_notify() {

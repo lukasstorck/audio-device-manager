@@ -47,108 +47,36 @@ TEST_CASE("mock backend: backend name reported on device") {
   CHECK(devices[0].get().backend_name() == "Mock");
 }
 
-TEST_CASE("mock backend: set_volume(...)") {
+TEST_CASE("mock backend: set_default(...) clears other devices of same type only") {
   audio_device_manager::AudioDeviceManager manager;
   auto* mock = new audio_device_manager::MockBackend();
   manager.register_backend(std::unique_ptr<audio_device_manager::AudioBackend>(mock));
 
-  mock->push_snapshot({make_snapshot()});
-  auto devices = manager.get_devices();
-  REQUIRE(devices.size() == 1);
-  audio_device_manager::Device& device = devices[0];
-  REQUIRE(device.volume() == doctest::Approx(0.5f));
-
-  audio_device_manager::CommandResult result = device.set_volume(0.9f);
-
-  CHECK(result.status == audio_device_manager::CommandStatus::Ok);
-  CHECK(static_cast<bool>(result) == true);
-  CHECK(device.volume() == doctest::Approx(0.9f));
-}
-
-TEST_CASE("mock backend: set_mute(...)") {
-  audio_device_manager::AudioDeviceManager manager;
-  auto* mock = new audio_device_manager::MockBackend();
-  manager.register_backend(std::unique_ptr<audio_device_manager::AudioBackend>(mock));
-
-  mock->push_snapshot({make_snapshot()});
-  auto devices = manager.get_devices();
-  REQUIRE(devices.size() == 1);
-  audio_device_manager::Device& device = devices[0];
-  REQUIRE(device.muted() == false);
-
-  audio_device_manager::CommandResult result = device.set_mute(true);
-
-  CHECK(result.status == audio_device_manager::CommandStatus::Ok);
-  CHECK(device.muted() == true);
-}
-
-TEST_CASE("mock backend: set_default(...)") {
-  audio_device_manager::AudioDeviceManager manager;
-  auto* mock = new audio_device_manager::MockBackend();
-  manager.register_backend(std::unique_ptr<audio_device_manager::AudioBackend>(mock));
-
-  mock->push_snapshot({make_snapshot()});
-  auto devices = manager.get_devices();
-  REQUIRE(devices.size() == 1);
-  audio_device_manager::Device& device = devices[0];
-  REQUIRE(device.is_default() == false);
-
-  audio_device_manager::CommandResult result = device.set_default();
-
-  CHECK(result.status == audio_device_manager::CommandStatus::Ok);
-  CHECK(device.is_default() == true);
-}
-
-TEST_CASE("mock backend: set_default(...) clears other devices") {
-  audio_device_manager::AudioDeviceManager manager;
-  auto* mock = new audio_device_manager::MockBackend();
-  manager.register_backend(std::unique_ptr<audio_device_manager::AudioBackend>(mock));
-
-  auto snap_a       = make_snapshot("dev1");
-  snap_a.is_default = true;
-  auto snap_b       = make_snapshot("dev2");
-  mock->push_snapshot({snap_a, snap_b});
+  auto out_a       = make_snapshot("out1");
+  out_a.is_default = true;
+  auto out_b       = make_snapshot("out2");
+  auto in_a        = make_snapshot("in1");
+  in_a.type        = audio_device_manager::DeviceType::Input;
+  in_a.is_default  = true;
+  mock->push_snapshot({out_a, out_b, in_a});
 
   auto devices = manager.get_devices();
-  REQUIRE(devices.size() == 2);
+  REQUIRE(devices.size() == 3);
 
-  audio_device_manager::Device* dev_a = nullptr;
-  audio_device_manager::Device* dev_b = nullptr;
+  audio_device_manager::Device* dev_out_b = nullptr;
+  audio_device_manager::Device* dev_in_a  = nullptr;
   for (audio_device_manager::Device& d : devices) {
-    if (d.id().backend_device_id == "dev1") dev_a = &d;
-    if (d.id().backend_device_id == "dev2") dev_b = &d;
+    if (d.id().backend_device_id == "out2") dev_out_b = &d;
+    if (d.id().backend_device_id == "in1") dev_in_a = &d;
   }
-  REQUIRE(dev_a != nullptr);
-  REQUIRE(dev_b != nullptr);
-  REQUIRE(dev_a->is_default() == true);
+  REQUIRE(dev_out_b != nullptr);
+  REQUIRE(dev_in_a != nullptr);
+  REQUIRE(dev_in_a->is_default() == true);
 
-  dev_b->set_default();
+  dev_out_b->set_default();
 
-  CHECK(dev_b->is_default() == true);
-  CHECK(dev_a->is_default() == false);
-}
-
-TEST_CASE("mock backend: set_volume_async(...) on_done callback") {
-  audio_device_manager::AudioDeviceManager manager;
-  auto* mock = new audio_device_manager::MockBackend();
-  manager.register_backend(std::unique_ptr<audio_device_manager::AudioBackend>(mock));
-
-  mock->push_snapshot({make_snapshot()});
-  auto devices = manager.get_devices();
-  REQUIRE(devices.size() == 1);
-  audio_device_manager::Device& device = devices[0];
-
-  std::promise<audio_device_manager::CommandResult> callback_promise;
-  auto callback_future = callback_promise.get_future();
-
-  auto future = device.set_volume_async(0.3f, [&callback_promise](audio_device_manager::CommandResult r) { callback_promise.set_value(r); });
-
-  audio_device_manager::CommandResult future_result   = future.get();
-  audio_device_manager::CommandResult callback_result = callback_future.get();
-
-  CHECK(future_result.status == audio_device_manager::CommandStatus::Ok);
-  CHECK(callback_result.status == audio_device_manager::CommandStatus::Ok);
-  CHECK(device.volume() == doctest::Approx(0.3f));
+  CHECK(dev_out_b->is_default() == true);
+  CHECK(dev_in_a->is_default() == true);  // different type, must stay untouched
 }
 
 TEST_CASE("mock backend: set_volume(...) on vanished device returns DeviceNotFound") {

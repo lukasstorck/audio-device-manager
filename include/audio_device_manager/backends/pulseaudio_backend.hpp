@@ -19,6 +19,12 @@ class PulseAudioBackend : public AudioBackend {
 
   ~PulseAudioBackend() override {
     if (!this->mainloop_) return;
+
+    // drain worker queue to avoid race with destroyed mainloop
+    std::promise<void> drained;
+    this->worker_.post([&drained] { drained.set_value(); });
+    drained.get_future().wait();
+
     {
       MainloopLockGuard lock(this);
       if (this->context_) {
@@ -78,8 +84,11 @@ class PulseAudioBackend : public AudioBackend {
 
   CommandResult handle_refresh() override {
     if (!this->available_) return {};
+
+    bool done = false;
     MainloopLockGuard lock(this);
-    this->refresh_devices();
+    this->refresh_devices(&done);
+    while (!done) this->mainloop_wait_(this->mainloop_);
     return {};
   }
 
@@ -209,11 +218,16 @@ class PulseAudioBackend : public AudioBackend {
     std::string default_sink_name;
     std::string default_source_name;
     std::vector<DeviceSnapshot> snapshots;
-    int pending = 2;  // sink list + source list
+    int pending       = 2;        // sink list + source list
+    bool* done_signal = nullptr;  // set + signalled once this refresh fully completes, see refresh_devices()
 
     void complete_one() {
       if (--this->pending > 0) return;
       this->self->finish_refresh(std::move(this->snapshots));
+      if (this->done_signal) {
+        *this->done_signal = true;
+        this->self->mainloop_signal_(this->self->mainloop_, 0);
+      }
     }
   };
 
@@ -229,10 +243,14 @@ class PulseAudioBackend : public AudioBackend {
     state->self->list_sources(state);
   }
 
-  void refresh_devices() {
-    auto state   = std::make_shared<RefreshState>();
-    state->self  = this;
-    auto* holder = new std::shared_ptr<RefreshState>(state);  // kept alive until server_info_callback consumes it
+  // done_signal, if given, is set true and the mainloop is signalled once this refresh's
+  // full callback chain (server info + sink list + source list) has completed. Caller must
+  // hold MainloopLockGuard and wait on it via mainloop_wait_ (see handle_refresh()).
+  void refresh_devices(bool* done_signal = nullptr) {
+    auto state         = std::make_shared<RefreshState>();
+    state->self        = this;
+    state->done_signal = done_signal;
+    auto* holder       = new std::shared_ptr<RefreshState>(state);  // kept alive until server_info_callback consumes it
 
     auto* op = this->context_get_server_info_(this->context_, &PulseAudioBackend::server_info_callback, holder);
     if (op) this->operation_unref_(op);
