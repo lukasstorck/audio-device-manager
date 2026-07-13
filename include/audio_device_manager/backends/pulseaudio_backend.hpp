@@ -18,12 +18,9 @@ class PulseAudioBackend : public AudioBackend {
   PulseAudioBackend() : AudioBackend("PulseAudio", BackendFeature::All) { this->try_init(); }
 
   ~PulseAudioBackend() override {
-    if (!this->mainloop_) return;
+    this->shutdown_workers();
 
-    // drain worker queue to avoid race with destroyed mainloop
-    std::promise<void> drained;
-    this->worker_.post([&drained] { drained.set_value(); });
-    drained.get_future().wait();
+    if (!this->mainloop_) return;
 
     {
       MainloopLockGuard lock(this);

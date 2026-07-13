@@ -134,3 +134,68 @@ TEST_CASE("mock backend: subscription callback fires on device state change") {
   manager.refresh_async();
   CHECK(wait_for_notification());  // notification expected
 }
+
+TEST_CASE("mock backend: poll worker disabled by default, no unsolicited refresh") {
+  audio_device_manager::AudioDeviceManager manager{/*notify_rate_limit=*/std::chrono::milliseconds(0)};
+  auto* mock = new audio_device_manager::MockBackend();  // poll_interval_ms defaults to 0 -> poll worker disabled
+  mock->push_snapshot({{{"dev1"}, "Speakers", audio_device_manager::DeviceType::Output}}, /*suppress_update_event=*/true);
+  manager.register_backend(std::unique_ptr<audio_device_manager::AudioBackend>(mock));
+
+  std::mutex mtx;
+  std::condition_variable cv;
+  int fired = 0;
+
+  auto sub = manager.subscribe([&] {
+    std::lock_guard lock(mtx);
+    ++fired;
+    cv.notify_all();
+  });
+
+  auto wait_for_notification = [&](std::chrono::milliseconds timeout) {
+    std::unique_lock lock(mtx);
+    int expected = fired + 1;
+    return cv.wait_for(lock, timeout, [&] { return fired >= expected; });
+  };
+
+  // wait for notification from refresh after subscribe
+  CHECK(wait_for_notification(std::chrono::milliseconds(50)));
+
+  // there is a change, but no active update event
+  mock->push_snapshot({{{"dev2"}, "Speakers", audio_device_manager::DeviceType::Output}}, /*suppress_update_event=*/true);
+  // no notification without poll worker
+  CHECK(!wait_for_notification(std::chrono::milliseconds(200)));
+}
+
+TEST_CASE("mock backend: poll worker periodically refreshes when enabled") {
+  audio_device_manager::AudioDeviceManager manager{/*notify_rate_limit=*/std::chrono::milliseconds(0)};
+  auto* mock = new audio_device_manager::MockBackend(/*poll_interval_ms=*/30);
+  mock->push_snapshot({{{"dev1"}, "Speakers", audio_device_manager::DeviceType::Output}}, /*suppress_update_event=*/true);
+  manager.register_backend(std::unique_ptr<audio_device_manager::AudioBackend>(mock));
+
+  std::mutex mtx;
+  std::condition_variable cv;
+  int fired = 0;
+
+  auto sub = manager.subscribe([&] {
+    std::lock_guard lock(mtx);
+    ++fired;
+    cv.notify_all();
+  });
+
+  auto wait_for_notification = [&](std::chrono::milliseconds timeout) {
+    std::unique_lock lock(mtx);
+    int expected = fired + 1;
+    return cv.wait_for(lock, timeout, [&] { return fired >= expected; });
+  };
+
+  // clear notification from subscribe
+  CHECK(wait_for_notification(std::chrono::milliseconds(50)));
+
+  // there is a change, but no active update event
+  mock->push_snapshot({{{"dev2"}, "Speakers", audio_device_manager::DeviceType::Output}}, /*suppress_update_event=*/true);
+  // active poll worker should refresh and trigger notification
+  CHECK(wait_for_notification(std::chrono::milliseconds(200)));
+
+  auto devices = manager.get_devices();
+  REQUIRE(devices.size() == 2);  // second device is found
+}

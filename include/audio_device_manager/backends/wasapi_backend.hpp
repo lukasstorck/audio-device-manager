@@ -245,6 +245,8 @@ class WasapiBackend : public AudioBackend {
   WasapiBackend() : WasapiBackend(std::make_shared<bool>(false)) {}
 
   ~WasapiBackend() override {
+    this->poll_worker_.stop();
+
     std::promise<void> released;
     auto released_future = released.get_future();
     this->worker_.post([this, &released] {

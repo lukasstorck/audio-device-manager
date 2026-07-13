@@ -1,5 +1,6 @@
 #pragma once
 #include <functional>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -13,7 +14,7 @@ using Request = std::function<CommandResult()>;
 
 class AudioBackend {
  public:
-  virtual ~AudioBackend() = default;
+  virtual ~AudioBackend() { this->shutdown_workers(); }
 
   /// Get a human-readable name for this backend
   const std::string& name() const { return this->name_; }
@@ -68,9 +69,19 @@ class AudioBackend {
   // on_thread_start/on_thread_end run once on the worker thread, before/after
   // the request loop. Backends needing per-thread setup (e.g. WASAPI's
   // CoInitializeEx) hook in here instead of managing their own worker.
+  //
+  // poll_interval_ms, if > 0, starts poll_worker_ calling request_refresh() on
+  // that cadence for the lifetime of the backend (see PollWorker). This is
+  // meant for backends with no push-notification mechanism of their own (e.g.
+  // ALSA), just to pick up changes made outside the program; it's not relied
+  // on for program-internal flow, which always refreshes explicitly where it
+  // needs a timely update. Defaults to 0 (disabled) - most backends push their
+  // own change notifications and don't need this.
   AudioBackend(char const* name, BackendFeature supported_features, std::function<void()> on_thread_start = nullptr,
-               std::function<void()> on_thread_end = nullptr)
-      : name_(name), supported_features_(supported_features), worker_(std::move(on_thread_start), std::move(on_thread_end)) {}
+               std::function<void()> on_thread_end = nullptr, int poll_interval_ms = 0)
+      : name_(name), supported_features_(supported_features), worker_(std::move(on_thread_start), std::move(on_thread_end)) {
+    this->poll_worker_.start(poll_interval_ms, [this] { this->request_refresh(); });
+  }
   std::mutex on_change_mutex_;
   BackendUpdateEventCallback on_change_;
 
@@ -93,8 +104,16 @@ class AudioBackend {
     if (this->on_change_) this->on_change_(std::move(snapshots));
   }
 
-  // std::thread polling_thread_;  // TODO
+  void shutdown_workers() {
+    this->poll_worker_.stop();
+
+    std::promise<void> drained;
+    this->worker_.post([&drained] { drained.set_value(); });
+    drained.get_future().wait();
+  }
+
   AsyncWorker worker_;
+  IntervalWorker poll_worker_;
 };
 
 }  // namespace audio_device_manager

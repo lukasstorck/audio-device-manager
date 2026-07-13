@@ -8,7 +8,6 @@ A cross-plattform easy-to-use library for querying and controlling audio device 
   - one file for general tests, e.g. ensuring only one backend is loaded (i.e. ALSA fallback)
 - [ ] add device feature flags, so the user can query if a device / backend support e.g. default devices
   - use feature flags in tests to determine if a test should be successful or return `unsupported`
-- [ ] add poll thread for alsa backend to detect os audio device changes
 - [ ] let all backend functions that interact with the OS be called with a timeout (which should be configurable), i.e. all handle_* functions
   - implement globally for all backends in the abstract class
   - return `timeout` error code when timeout occurs, then try to cancle the worker job so that other calls can be handled
